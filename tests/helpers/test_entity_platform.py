@@ -2,11 +2,11 @@
 import asyncio
 from datetime import timedelta
 import logging
-from unittest.mock import MagicMock, Mock, patch
 
-import asynctest
 import pytest
 
+from homeassistant.const import UNIT_PERCENTAGE
+from homeassistant.core import callback
 from homeassistant.exceptions import PlatformNotReady
 from homeassistant.helpers import entity_platform, entity_registry
 from homeassistant.helpers.entity import async_generate_entity_id
@@ -16,6 +16,7 @@ from homeassistant.helpers.entity_component import (
 )
 import homeassistant.util.dt as dt_util
 
+from tests.async_mock import Mock, patch
 from tests.common import (
     MockConfigEntry,
     MockEntity,
@@ -134,7 +135,7 @@ async def test_update_state_adds_entities_with_update_before_add_false(hass):
     assert not ent.update.called
 
 
-@asynctest.patch("homeassistant.helpers.entity_platform.async_track_time_interval")
+@patch("homeassistant.helpers.entity_platform.async_track_time_interval")
 async def test_set_scan_interval_via_platform(mock_track, hass):
     """Test the setting of the scan interval via platform."""
 
@@ -166,7 +167,7 @@ async def test_adding_entities_with_generator_and_thread_callback(hass):
 
     def create_entity(number):
         """Create entity helper."""
-        entity = MockEntity()
+        entity = MockEntity(unique_id=f"unique{number}")
         entity.entity_id = async_generate_entity_id(DOMAIN + ".{}", "Number", hass=hass)
         return entity
 
@@ -181,7 +182,7 @@ async def test_platform_warn_slow_setup(hass):
 
     component = EntityComponent(_LOGGER, DOMAIN, hass)
 
-    with patch.object(hass.loop, "call_later", MagicMock()) as mock_call:
+    with patch.object(hass.loop, "call_later") as mock_call:
         await component.async_setup({DOMAIN: {"platform": "platform"}})
         assert mock_call.called
 
@@ -270,8 +271,6 @@ async def test_parallel_updates_async_platform_with_constant(hass):
 
     handle = list(component._platforms.values())[-1]
 
-    assert handle.parallel_updates == 2
-
     class AsyncEntity(MockEntity):
         """Mock entity that has async_update."""
 
@@ -296,7 +295,6 @@ async def test_parallel_updates_sync_platform(hass):
     await component.async_setup({DOMAIN: {"platform": "platform"}})
 
     handle = list(component._platforms.values())[-1]
-    assert handle.parallel_updates is None
 
     class SyncEntity(MockEntity):
         """Mock entity that has update."""
@@ -323,7 +321,6 @@ async def test_parallel_updates_sync_platform_with_constant(hass):
     await component.async_setup({DOMAIN: {"platform": "platform"}})
 
     handle = list(component._platforms.values())[-1]
-    assert handle.parallel_updates == 2
 
     class SyncEntity(MockEntity):
         """Mock entity that has update."""
@@ -394,7 +391,7 @@ async def test_using_prescribed_entity_id(hass):
 
 
 async def test_using_prescribed_entity_id_with_unique_id(hass):
-    """Test for ammending predefined entity ID because currently exists."""
+    """Test for amending predefined entity ID because currently exists."""
     component = EntityComponent(_LOGGER, DOMAIN, hass)
 
     await component.async_add_entities([MockEntity(entity_id="test_domain.world")])
@@ -707,6 +704,7 @@ async def test_device_info_called(hass):
                         "model": "test-model",
                         "name": "test-name",
                         "sw_version": "test-sw",
+                        "entry_type": "service",
                         "via_device": ("hue", "via-id"),
                     },
                 ),
@@ -733,6 +731,7 @@ async def test_device_info_called(hass):
     assert device.model == "test-model"
     assert device.name == "test-name"
     assert device.sw_version == "test-sw"
+    assert device.entry_type == "service"
     assert device.via_device_id == via.id
 
 
@@ -804,7 +803,7 @@ async def test_entity_info_added_to_entity_registry(hass):
         capability_attributes={"max": 100},
         supported_features=5,
         device_class="mock-device-class",
-        unit_of_measurement="%",
+        unit_of_measurement=UNIT_PERCENTAGE,
     )
 
     await component.async_add_entities([entity_default])
@@ -816,7 +815,7 @@ async def test_entity_info_added_to_entity_registry(hass):
     assert entry_default.capabilities == {"max": 100}
     assert entry_default.supported_features == 5
     assert entry_default.device_class == "mock-device-class"
-    assert entry_default.unit_of_measurement == "%"
+    assert entry_default.unit_of_measurement == UNIT_PERCENTAGE
 
 
 async def test_override_restored_entities(hass):
@@ -839,7 +838,7 @@ async def test_override_restored_entities(hass):
 
 
 async def test_platform_with_no_setup(hass, caplog):
-    """Test setting up a platform that doesnt' support setup."""
+    """Test setting up a platform that does not support setup."""
     entity_platform = MockEntityPlatform(
         hass, domain="mock-integration", platform_name="mock-platform", platform=None
     )
@@ -850,3 +849,37 @@ async def test_platform_with_no_setup(hass, caplog):
         "The mock-platform platform for the mock-integration integration does not support platform setup."
         in caplog.text
     )
+
+
+async def test_platforms_sharing_services(hass):
+    """Test platforms share services."""
+    entity_platform1 = MockEntityPlatform(
+        hass, domain="mock_integration", platform_name="mock_platform", platform=None
+    )
+    entity1 = MockEntity(entity_id="mock_integration.entity_1")
+    await entity_platform1.async_add_entities([entity1])
+
+    entity_platform2 = MockEntityPlatform(
+        hass, domain="mock_integration", platform_name="mock_platform", platform=None
+    )
+    entity2 = MockEntity(entity_id="mock_integration.entity_2")
+    await entity_platform2.async_add_entities([entity2])
+
+    entities = []
+
+    @callback
+    def handle_service(entity, data):
+        entities.append(entity)
+
+    entity_platform1.async_register_entity_service("hello", {}, handle_service)
+    entity_platform2.async_register_entity_service(
+        "hello", {}, Mock(side_effect=AssertionError("Should not be called"))
+    )
+
+    await hass.services.async_call(
+        "mock_platform", "hello", {"entity_id": "all"}, blocking=True
+    )
+
+    assert len(entities) == 2
+    assert entity1 in entities
+    assert entity2 in entities

@@ -5,6 +5,7 @@ import socket
 
 import voluptuous as vol
 from zeroconf import (
+    InterfaceChoice,
     NonUniqueNameException,
     ServiceBrowser,
     ServiceInfo,
@@ -20,6 +21,8 @@ from homeassistant.const import (
     __version__,
 )
 from homeassistant.generated.zeroconf import HOMEKIT, ZEROCONF
+import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers.network import NoURLAvailableError, get_url
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -34,26 +37,59 @@ ATTR_PROPERTIES = "properties"
 ZEROCONF_TYPE = "_home-assistant._tcp.local."
 HOMEKIT_TYPE = "_hap._tcp.local."
 
-CONFIG_SCHEMA = vol.Schema({DOMAIN: vol.Schema({})}, extra=vol.ALLOW_EXTRA)
+CONF_DEFAULT_INTERFACE = "default_interface"
+DEFAULT_DEFAULT_INTERFACE = False
+
+CONFIG_SCHEMA = vol.Schema(
+    {
+        DOMAIN: vol.Schema(
+            {
+                vol.Optional(
+                    CONF_DEFAULT_INTERFACE, default=DEFAULT_DEFAULT_INTERFACE
+                ): cv.boolean
+            }
+        )
+    },
+    extra=vol.ALLOW_EXTRA,
+)
 
 
 def setup(hass, config):
     """Set up Zeroconf and make Home Assistant discoverable."""
-    zeroconf = Zeroconf()
+    if config.get(CONF_DEFAULT_INTERFACE):
+        zeroconf = Zeroconf(interfaces=InterfaceChoice.Default)
+    else:
+        zeroconf = Zeroconf()
     zeroconf_name = f"{hass.config.location_name}.{ZEROCONF_TYPE}"
 
     params = {
         "version": __version__,
-        "base_url": hass.config.api.base_url,
+        "external_url": None,
+        "internal_url": None,
+        # Old base URL, for backward compatibility
+        "base_url": None,
         # Always needs authentication
         "requires_api_password": True,
     }
+
+    try:
+        params["external_url"] = get_url(hass, allow_internal=False)
+    except NoURLAvailableError:
+        pass
+
+    try:
+        params["internal_url"] = get_url(hass, allow_external=False)
+    except NoURLAvailableError:
+        pass
+
+    # Set old base URL based on external or internal
+    params["base_url"] = params["external_url"] or params["internal_url"]
 
     host_ip = util.get_local_ip()
 
     try:
         host_ip_pton = socket.inet_pton(socket.AF_INET, host_ip)
-    except socket.error:
+    except OSError:
         host_ip_pton = socket.inet_pton(socket.AF_INET6, host_ip)
 
     info = ServiceInfo(
@@ -108,7 +144,6 @@ def setup(hass, config):
 
     def stop_zeroconf(_):
         """Stop Zeroconf."""
-        zeroconf.unregister_service(info)
         zeroconf.close()
 
     hass.bus.listen_once(EVENT_HOMEASSISTANT_STOP, stop_zeroconf)
@@ -133,7 +168,11 @@ def handle_homekit(hass, info) -> bool:
         return False
 
     for test_model in HOMEKIT:
-        if model != test_model and not model.startswith(test_model + " "):
+        if (
+            model != test_model
+            and not model.startswith(f"{test_model} ")
+            and not model.startswith(f"{test_model}-")
+        ):
             continue
 
         hass.add_job(
@@ -148,15 +187,27 @@ def handle_homekit(hass, info) -> bool:
 
 def info_from_service(service):
     """Return prepared info from mDNS entries."""
-    properties = {}
+    properties = {"_raw": {}}
 
     for key, value in service.properties.items():
+        # See https://ietf.org/rfc/rfc6763.html#section-6.4 and
+        # https://ietf.org/rfc/rfc6763.html#section-6.5 for expected encodings
+        # for property keys and values
+        try:
+            key = key.decode("ascii")
+        except UnicodeDecodeError:
+            _LOGGER.debug(
+                "Ignoring invalid key provided by [%s]: %s", service.name, key
+            )
+            continue
+
+        properties["_raw"][key] = value
+
         try:
             if isinstance(value, bytes):
-                value = value.decode("utf-8")
-            properties[key.decode("utf-8")] = value
+                properties[key] = value.decode("utf-8")
         except UnicodeDecodeError:
-            _LOGGER.warning("Unicode decode error on %s: %s", key, value)
+            pass
 
     address = service.addresses[0]
 

@@ -4,8 +4,10 @@ import logging
 from mill import Mill
 import voluptuous as vol
 
-from homeassistant.components.climate import PLATFORM_SCHEMA, ClimateDevice
+from homeassistant.components.climate import PLATFORM_SCHEMA, ClimateEntity
 from homeassistant.components.climate.const import (
+    CURRENT_HVAC_HEAT,
+    CURRENT_HVAC_IDLE,
     FAN_ON,
     HVAC_MODE_HEAT,
     HVAC_MODE_OFF,
@@ -83,7 +85,7 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
     )
 
 
-class MillHeater(ClimateDevice):
+class MillHeater(ClimateEntity):
     """Representation of a Mill Thermostat device."""
 
     def __init__(self, heater, mill_data_connection):
@@ -166,6 +168,13 @@ class MillHeater(ClimateDevice):
     def max_temp(self):
         """Return the maximum temperature."""
         return MAX_TEMP
+
+    @property
+    def hvac_action(self):
+        """Return current hvac i.e. heat, cool, idle."""
+        if self._heater.is_gen1 or self._heater.is_heating == 1:
+            return CURRENT_HVAC_HEAT
+        return CURRENT_HVAC_IDLE
 
     @property
     def hvac_mode(self) -> str:

@@ -1,12 +1,11 @@
 """Test Home Assistant scenes."""
-from unittest.mock import patch
-
 import pytest
 import voluptuous as vol
 
 from homeassistant.components.homeassistant import scene as ha_scene
 from homeassistant.setup import async_setup_component
 
+from tests.async_mock import patch
 from tests.common import async_mock_service
 
 
@@ -57,6 +56,24 @@ async def test_apply_service(hass):
     state = hass.states.get("light.bed_light")
     assert state.state == "on"
     assert state.attributes["brightness"] == 50
+
+    turn_on_calls = async_mock_service(hass, "light", "turn_on")
+    assert await hass.services.async_call(
+        "scene",
+        "apply",
+        {
+            "transition": 42,
+            "entities": {"light.bed_light": {"state": "on", "brightness": 50}},
+        },
+        blocking=True,
+    )
+
+    assert len(turn_on_calls) == 1
+    assert turn_on_calls[0].domain == "light"
+    assert turn_on_calls[0].service == "turn_on"
+    assert turn_on_calls[0].data.get("transition") == 42
+    assert turn_on_calls[0].data.get("entity_id") == "light.bed_light"
+    assert turn_on_calls[0].data.get("brightness") == 50
 
 
 async def test_create_service(hass, caplog):
@@ -258,3 +275,33 @@ async def test_entities_in_scene(hass):
         ("scene.scene_3", ["light.kitchen", "light.living_room"]),
     ):
         assert ha_scene.entities_in_scene(hass, scene_id) == entities
+
+
+async def test_config(hass):
+    """Test passing config in YAML."""
+    assert await async_setup_component(
+        hass,
+        "scene",
+        {
+            "scene": [
+                {
+                    "id": "scene_id",
+                    "name": "Scene Icon",
+                    "icon": "mdi:party",
+                    "entities": {"light.kitchen": "on"},
+                },
+                {
+                    "name": "Scene No Icon",
+                    "entities": {"light.kitchen": {"state": "on"}},
+                },
+            ]
+        },
+    )
+
+    icon = hass.states.get("scene.scene_icon")
+    assert icon is not None
+    assert icon.attributes["icon"] == "mdi:party"
+
+    no_icon = hass.states.get("scene.scene_no_icon")
+    assert no_icon is not None
+    assert "icon" not in no_icon.attributes

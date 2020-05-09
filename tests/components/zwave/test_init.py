@@ -3,7 +3,6 @@ import asyncio
 from collections import OrderedDict
 from datetime import datetime
 import unittest
-from unittest.mock import MagicMock, patch
 
 import pytest
 from pytz import utc
@@ -23,13 +22,14 @@ from homeassistant.helpers.device_registry import async_get_registry as get_dev_
 from homeassistant.helpers.entity_registry import async_get_registry
 from homeassistant.setup import setup_component
 
-from tests.common import (
-    async_fire_time_changed,
-    get_test_home_assistant,
-    mock_coro,
-    mock_registry,
-)
+from tests.async_mock import AsyncMock, MagicMock, patch
+from tests.common import async_fire_time_changed, get_test_home_assistant, mock_registry
 from tests.mock.zwave import MockEntityValues, MockNetwork, MockNode, MockValue
+
+
+@pytest.fixture(autouse=True)
+def mock_storage(hass_storage):
+    """Autouse hass_storage for the TestCase tests."""
 
 
 async def test_valid_device_config(hass, mock_openzwave):
@@ -100,7 +100,7 @@ async def test_network_key_validation(hass, mock_openzwave):
 
 
 async def test_erronous_network_key_fails_validation(hass, mock_openzwave):
-    """Test failing erronous network key validation."""
+    """Test failing erroneous network key validation."""
     test_values = [
         (
             "0x 01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, "
@@ -703,7 +703,7 @@ async def test_power_schemes(hass, mock_openzwave):
         genre=const.GENRE_USER,
         type=const.TYPE_BOOL,
     )
-    hass.async_add_job(mock_receivers[0], node, switch)
+    await hass.async_add_job(mock_receivers[0], node, switch)
 
     await hass.async_block_till_done()
 
@@ -725,8 +725,9 @@ async def test_power_schemes(hass, mock_openzwave):
             index=const.INDEX_SENSOR_MULTILEVEL_POWER,
             instance=13,
             command_class=const.COMMAND_CLASS_SENSOR_MULTILEVEL,
+            genre=const.GENRE_USER,  # to avoid exception
         )
-        hass.async_add_job(mock_receivers[0], node, power)
+        await hass.async_add_job(mock_receivers[0], node, power)
         await hass.async_block_till_done()
 
     assert (
@@ -867,7 +868,7 @@ class TestZWaveDeviceEntityValues(unittest.TestCase):
     @patch.object(zwave, "discovery")
     def test_entity_discovery(self, discovery, import_module):
         """Test the creation of a new entity."""
-        discovery.async_load_platform.return_value = mock_coro()
+        discovery.async_load_platform = AsyncMock(return_value=None)
         mock_platform = MagicMock()
         import_module.return_value = mock_platform
         mock_device = MagicMock()
@@ -929,7 +930,7 @@ class TestZWaveDeviceEntityValues(unittest.TestCase):
     @patch.object(zwave, "discovery")
     def test_entity_existing_values(self, discovery, import_module):
         """Test the loading of already discovered values."""
-        discovery.async_load_platform.return_value = mock_coro()
+        discovery.async_load_platform = AsyncMock(return_value=None)
         mock_platform = MagicMock()
         import_module.return_value = mock_platform
         mock_device = MagicMock()
@@ -997,7 +998,7 @@ class TestZWaveDeviceEntityValues(unittest.TestCase):
     @patch.object(zwave, "discovery")
     def test_entity_workaround_component(self, discovery, import_module):
         """Test component workaround."""
-        discovery.async_load_platform.return_value = mock_coro()
+        discovery.async_load_platform = AsyncMock(return_value=None)
         mock_platform = MagicMock()
         import_module.return_value = mock_platform
         mock_device = MagicMock()
@@ -1796,6 +1797,31 @@ class TestZWaveServices(unittest.TestCase):
         self.hass.block_till_done()
 
         assert self.zwave_network.nodes[14].values[12].data == 2
+
+    def test_set_node_value_with_long_id_and_text_value(self):
+        """Test zwave set_node_value service."""
+        value = MockValue(
+            index=87512398541236578,
+            command_class=const.COMMAND_CLASS_SWITCH_COLOR,
+            data="#ff0000",
+        )
+        node = MockNode(node_id=14, command_classes=[const.COMMAND_CLASS_SWITCH_COLOR])
+        node.values = {87512398541236578: value}
+        node.get_values.return_value = node.values
+        self.zwave_network.nodes = {14: node}
+
+        self.hass.services.call(
+            "zwave",
+            "set_node_value",
+            {
+                const.ATTR_NODE_ID: 14,
+                const.ATTR_VALUE_ID: "87512398541236578",
+                const.ATTR_CONFIG_VALUE: "#00ff00",
+            },
+        )
+        self.hass.block_till_done()
+
+        assert self.zwave_network.nodes[14].values[87512398541236578].data == "#00ff00"
 
     def test_refresh_node_value(self):
         """Test zwave refresh_node_value service."""

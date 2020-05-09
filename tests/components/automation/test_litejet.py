@@ -22,13 +22,13 @@ ENTITY_OTHER_SWITCH_NUMBER = 2
 
 @pytest.fixture
 def calls(hass):
-    """Track calls to a mock serivce."""
+    """Track calls to a mock service."""
     return async_mock_service(hass, "test", "automation")
 
 
 def get_switch_name(number):
     """Get a mock switch name."""
-    return "Mock Switch #" + str(number)
+    return f"Mock Switch #{number}"
 
 
 @pytest.fixture
